@@ -105,6 +105,12 @@ Vesktop's launcher reads `~/.config/vesktop-flags.conf`. Add these two lines:
 
 > The port is only bound to localhost. If you don't want it always on, you can instead launch Vesktop manually with these flags only when needed.
 
+> **Autostart gotcha:** `vesktop-flags.conf` is only read by the `/usr/bin/vesktop` launcher script. If your desktop/autostart launches the raw binary (`/usr/lib/vesktop/vesktop`) directly, the flags are ignored and after a reboot the bridge can't reach Vesktop. Fix your autostart entry to call the launcher, or add the flags explicitly. e.g. `~/.config/autostart/vesktop.desktop`:
+>
+> ```
+> Exec=/usr/lib/vesktop/vesktop --enable-features=UseOzonePlatform --ozone-platform=wayland --remote-debugging-port=9222 --remote-allow-origins=*
+> ```
+
 ### 3. Disable Vesktop's built-in arRPC
 
 The bridge needs to own `discord-ipc-0`. Vesktop's arRPC holds it otherwise.
@@ -189,6 +195,7 @@ The bridge retries the CDP connection every 2 s, so it's fine if Vesktop starts 
 |---|---|
 | `[ipc] failed to bind discord-ipc-0` | Vesktop's built-in arRPC is still enabled, or another Discord client owns the socket. Disable arRPC and restart Vesktop. |
 | `[cdp] connected to Vesktop` never appears | `--remote-debugging-port=9222` wasn't loaded. Launch Vesktop from a terminal and check `curl http://127.0.0.1:9222/json`. |
+| Everything works until a reboot, then `9222 DOWN` | Your autostart launches the raw Vesktop binary and skips `vesktop-flags.conf`. Add the flags to your autostart entry (see step 2). |
 | Plugin log says `Login failed` forever | No RPC server is listening on `discord-ipc-0`. Check the bridge is running (`systemctl --user status vesktop-deck-rpc`). |
 | Buttons toggle but icon state is wrong | The plugin needs `VOICE_SETTINGS_UPDATE`; make sure only one RPC server is running and the plugin was restarted after the bridge started. |
 | Games aren't auto-detected | Process scanning is enabled by default; check the journal for `[process] detected game!`. Make sure you didn't pass `--no-process-scanning`. |
