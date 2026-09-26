@@ -1,13 +1,12 @@
 import { CDP } from "./cdp.js";
+import ProcessServer from "./process.js";
+import { Renderer } from "./renderer.js";
 import { RpcServer } from "./server.js";
-import { Voice } from "./voice.js";
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
     const cdp = new CDP();
-    const voice = new Voice(cdp);
-    const server = new RpcServer(voice);
+    const renderer = new Renderer(cdp);
+    const server = new RpcServer(renderer);
 
     let connecting = false;
     async function connectCdp() {
@@ -40,8 +39,16 @@ async function main() {
     await connectCdp();
     server.startPolling();
 
+    let processServer;
+    if (!process.argv.includes("--no-process-scanning") && !process.env.ARRPC_NO_PROCESS_SCANNING) {
+        processServer = new ProcessServer({
+            message: (socket, message) => server.handleMessage(socket, message)
+        });
+    }
+
     const shutdown = () => {
         console.log("\n[main] shutting down");
+        processServer?.stop();
         server.stop();
         cdp.close();
         process.exit(0);

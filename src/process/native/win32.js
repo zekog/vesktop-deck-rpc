@@ -1,0 +1,29 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+export async function getProcesses() {
+    const { stdout } = await execFileAsync("powershell.exe", [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress"
+    ]);
+
+    const rows = JSON.parse(stdout);
+    const list = Array.isArray(rows) ? rows : [rows];
+
+    return list
+        .filter(r => r.ExecutablePath)
+        .map(r => [r.ProcessId, r.ExecutablePath, r.CommandLine ? splitCommandLine(r.CommandLine) : null]);
+}
+
+function splitCommandLine(cmd) {
+    const args = [];
+    const re = /"([^"]*)"|(\S+)/g;
+    let m;
+    while ((m = re.exec(cmd))) {
+        args.push(m[1] !== undefined ? m[1] : m[2]);
+    }
+    return args;
+}

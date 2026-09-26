@@ -34,14 +34,15 @@ const BASE_SETTINGS = {
 };
 
 export class RpcServer {
-    constructor(voice) {
-        this.voice = voice;
+    constructor(renderer) {
+        this.renderer = renderer;
         this.settings = structuredClone(BASE_SETTINGS);
         this.sockets = new Set();
+        this.socketId = 0;
         this.ipc = new DiscordIpcServer({
             connection: socket => this.#onConnection(socket),
-            message: (socket, message) => this.#onMessage(socket, message),
-            close: socket => this.sockets.delete(socket)
+            message: (socket, message) => this.handleMessage(socket, message),
+            close: socket => this.#onClose(socket)
         });
     }
 
@@ -59,6 +60,7 @@ export class RpcServer {
     }
 
     #onConnection(socket) {
+        socket.socketId = this.socketId++;
         this.sockets.add(socket);
         this.#send(socket, {
             cmd: "DISPATCH",
@@ -76,7 +78,14 @@ export class RpcServer {
         });
     }
 
-    async #onMessage(socket, { cmd, args, evt, nonce }) {
+    #onClose(socket) {
+        this.sockets.delete(socket);
+        this.renderer
+            .forwardActivity({ activity: null, pid: socket.lastPid, socketId: String(socket.socketId) })
+            .catch(() => {});
+    }
+
+    async handleMessage(socket, { cmd, args, evt, nonce }) {
         switch (cmd) {
             case "AUTHENTICATE":
                 this.#reply(socket, cmd, nonce, { application: MOCK_APPLICATION, user: MOCK_USER });
@@ -105,8 +114,26 @@ export class RpcServer {
                 return;
 
             case "SET_ACTIVITY":
-                this.forwardActivity(socket, args).catch(() => {});
-                this.#reply(socket, cmd, nonce, {});
+                this.#handleActivity(socket, args, nonce);
+                return;
+
+            case "INVITE_BROWSER":
+                this.#handleInvite(socket, args, nonce);
+                return;
+
+            case "GUILD_TEMPLATE_BROWSER":
+                this.#reply(socket, cmd, nonce, { code: args?.code });
+                return;
+
+            case "DEEP_LINK":
+                this.renderer
+                    .handleDeepLink(args)
+                    .then(success => this.#reply(socket, cmd, nonce, null, !success))
+                    .catch(() => this.#reply(socket, cmd, nonce, null, true));
+                return;
+
+            case "CONNECTIONS_CALLBACK":
+                this.#reply(socket, cmd, nonce, { code: 1000 }, true);
                 return;
 
             case "GET_GUILDS":
@@ -126,8 +153,72 @@ export class RpcServer {
         }
     }
 
+    #handleActivity(socket, args = {}, nonce) {
+        const { activity, pid } = args;
+
+        if (!activity) {
+            this.#reply(socket, "SET_ACTIVITY", nonce, null);
+            this.renderer
+                .forwardActivity({ activity: null, pid, socketId: String(socket.socketId) })
+                .catch(() => {});
+            return;
+        }
+
+        const { buttons, timestamps, instance } = activity;
+        socket.lastPid = pid ?? socket.lastPid;
+
+        const metadata = {};
+        const extra = {};
+        if (buttons) {
+            metadata.button_urls = buttons.map(x => x.url);
+            extra.buttons = buttons.map(x => x.label);
+        }
+
+        if (timestamps) {
+            for (const key in timestamps) {
+                if (Date.now().toString().length - timestamps[key].toString().length > 2) {
+                    timestamps[key] = Math.floor(1000 * timestamps[key]);
+                }
+            }
+        }
+
+        this.renderer
+            .forwardActivity({
+                activity: {
+                    application_id: socket.clientId,
+                    type: 0,
+                    metadata,
+                    flags: instance ? 1 << 0 : 0,
+                    ...activity,
+                    ...extra
+                },
+                pid,
+                socketId: String(socket.socketId)
+            })
+            .catch(() => {});
+
+        this.#reply(socket, "SET_ACTIVITY", nonce, {
+            ...activity,
+            ...extra,
+            name: "",
+            application_id: socket.clientId,
+            type: 0,
+            metadata
+        });
+    }
+
+    #handleInvite(socket, args, nonce) {
+        const { code } = args ?? {};
+        this.renderer
+            .handleInvite(code)
+            .then(valid =>
+                this.#reply(socket, "INVITE_BROWSER", nonce, valid ? { code } : { code: 4011, message: `Invalid invite id: ${code}` }, !valid)
+            )
+            .catch(() => this.#reply(socket, "INVITE_BROWSER", nonce, { code: 4011, message: `Invalid invite id: ${code}` }, true));
+    }
+
     async refresh() {
-        const state = await this.voice.getState().catch(() => null);
+        const state = await this.renderer.getVoiceState().catch(() => null);
         if (state) {
             this.settings.mute = state.mute;
             this.settings.deaf = state.deaf;
@@ -137,37 +228,14 @@ export class RpcServer {
 
     async apply(args = {}) {
         if (typeof args.mute === "boolean") {
-            const result = await this.voice.setMute(args.mute).catch(() => null);
+            const result = await this.renderer.setMute(args.mute).catch(() => null);
             if (typeof result === "boolean") this.settings.mute = result;
         }
         if (typeof args.deaf === "boolean") {
-            const result = await this.voice.setDeaf(args.deaf).catch(() => null);
+            const result = await this.renderer.setDeaf(args.deaf).catch(() => null);
             if (typeof result === "boolean") this.settings.deaf = result;
         }
         await this.refresh();
-    }
-
-    async forwardActivity(socket, { activity, pid } = {}) {
-        if (!activity) {
-            await this.voice.forwardActivity({ activity: null, pid, socketId: String(socket.clientId ?? "deck") });
-            return;
-        }
-
-        const translated = { application_id: socket.clientId, type: 0, ...activity };
-        if (activity.buttons) {
-            translated.metadata = { button_urls: activity.buttons.map(b => b.url) };
-            translated.buttons = activity.buttons.map(b => b.label);
-        }
-        if (activity.timestamps) {
-            for (const key of Object.keys(activity.timestamps)) {
-                const value = activity.timestamps[key];
-                if (typeof value === "number" && Date.now().toString().length - value.toString().length > 2) {
-                    translated.timestamps[key] = Math.floor(value * 1000);
-                }
-            }
-        }
-
-        await this.voice.forwardActivity({ activity: translated, pid, socketId: String(socket.clientId ?? "deck") });
     }
 
     broadcast() {
@@ -179,7 +247,7 @@ export class RpcServer {
 
     startPolling(interval = 1000) {
         this.timer = setInterval(async () => {
-            if (!this.voice.cdp.ready) return;
+            if (!this.renderer.cdp.ready) return;
             const before = `${this.settings.mute}:${this.settings.deaf}`;
             await this.refresh().catch(() => {});
             if (before !== `${this.settings.mute}:${this.settings.deaf}`) this.broadcast();
