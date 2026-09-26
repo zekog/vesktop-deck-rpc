@@ -6,7 +6,6 @@ const MOCK_USER = {
     discriminator: "0",
     global_name: "arRPC",
     avatar: "cfefa4d9839fb4bdf030f91c2a13e95c",
-    avatar_decoration_data: null,
     bot: false,
     flags: 0,
     premium_type: 0
@@ -37,6 +36,7 @@ export class RpcServer {
     constructor(renderer) {
         this.renderer = renderer;
         this.settings = structuredClone(BASE_SETTINGS);
+        this.currentUser = null;
         this.sockets = new Set();
         this.socketId = 0;
         this.ipc = new DiscordIpcServer({
@@ -71,7 +71,7 @@ export class RpcServer {
                     api_endpoint: "//discord.com/api",
                     environment: "production"
                 },
-                user: MOCK_USER
+                user: this.currentUser ?? MOCK_USER
             },
             evt: "READY",
             nonce: null
@@ -87,9 +87,12 @@ export class RpcServer {
 
     async handleMessage(socket, { cmd, args, evt, nonce }) {
         switch (cmd) {
-            case "AUTHENTICATE":
-                this.#reply(socket, cmd, nonce, { application: MOCK_APPLICATION, user: MOCK_USER });
+            case "AUTHENTICATE": {
+                const user = await this.renderer.getCurrentUser().catch(() => null);
+                if (user) this.currentUser = user;
+                this.#reply(socket, cmd, nonce, { application: MOCK_APPLICATION, user: this.currentUser ?? MOCK_USER });
                 return;
+            }
 
             case "GET_VOICE_SETTINGS":
                 await this.refresh();
@@ -97,9 +100,66 @@ export class RpcServer {
                 return;
 
             case "SET_VOICE_SETTINGS":
-                await this.apply(args);
+                await this.renderer.applyVoiceSettings(args).catch(() => {});
+                await this.refresh();
                 this.#reply(socket, cmd, nonce, this.settings);
                 this.broadcast();
+                return;
+
+            case "GET_SELECTED_VOICE_CHANNEL": {
+                const channel = await this.renderer.getSelectedVoiceChannel().catch(() => null);
+                this.#reply(socket, cmd, nonce, channel);
+                return;
+            }
+
+            case "SET_USER_VOICE_SETTINGS": {
+                const result = await this.renderer.setUserVoiceSettings(args).catch(() => null);
+                this.#reply(socket, cmd, nonce, result ?? {});
+                return;
+            }
+
+            case "GET_IMAGE": {
+                if (args?.type !== "user") {
+                    this.#reply(socket, cmd, nonce, { data_url: "" });
+                    return;
+                }
+                const image = await this.renderer.getUserImage(args.id).catch(() => null);
+                this.#reply(socket, cmd, nonce, image ?? { data_url: "" });
+                return;
+            }
+
+            case "GET_GUILDS": {
+                const guilds = await this.renderer.getGuilds().catch(() => null);
+                this.#reply(socket, cmd, nonce, guilds ?? { guilds: [] });
+                return;
+            }
+
+            case "GET_GUILD": {
+                const guild = await this.renderer.getGuild(args?.guild_id).catch(() => null);
+                this.#reply(socket, cmd, nonce, guild ?? {});
+                return;
+            }
+
+            case "GET_CHANNELS": {
+                const channels = await this.renderer.getChannels(args?.guild_id).catch(() => null);
+                this.#reply(socket, cmd, nonce, channels ?? { channels: [] });
+                return;
+            }
+
+            case "GET_CHANNEL": {
+                const channel = await this.renderer.getChannel(args?.channel_id).catch(() => null);
+                this.#reply(socket, cmd, nonce, channel ?? {});
+                return;
+            }
+
+            case "SELECT_VOICE_CHANNEL":
+                await this.renderer.selectVoiceChannel(args?.channel_id ?? null).catch(() => {});
+                await new Promise(r => setTimeout(r, 300));
+                this.#reply(socket, cmd, nonce, await this.renderer.getSelectedVoiceChannel().catch(() => null));
+                return;
+
+            case "SELECT_TEXT_CHANNEL":
+                this.#reply(socket, cmd, nonce, {});
                 return;
 
             case "SUBSCRIBE":
@@ -134,14 +194,6 @@ export class RpcServer {
 
             case "CONNECTIONS_CALLBACK":
                 this.#reply(socket, cmd, nonce, { code: 1000 }, true);
-                return;
-
-            case "GET_GUILDS":
-                this.#reply(socket, cmd, nonce, { guilds: [] });
-                return;
-
-            case "GET_CHANNELS":
-                this.#reply(socket, cmd, nonce, { channels: [] });
                 return;
 
             case "GET_SOUNDBOARD_SOUNDS":
@@ -218,24 +270,9 @@ export class RpcServer {
     }
 
     async refresh() {
-        const state = await this.renderer.getVoiceState().catch(() => null);
-        if (state) {
-            this.settings.mute = state.mute;
-            this.settings.deaf = state.deaf;
-        }
+        const settings = await this.renderer.getVoiceSettings().catch(() => null);
+        if (settings) this.settings = settings;
         return this.settings;
-    }
-
-    async apply(args = {}) {
-        if (typeof args.mute === "boolean") {
-            const result = await this.renderer.setMute(args.mute).catch(() => null);
-            if (typeof result === "boolean") this.settings.mute = result;
-        }
-        if (typeof args.deaf === "boolean") {
-            const result = await this.renderer.setDeaf(args.deaf).catch(() => null);
-            if (typeof result === "boolean") this.settings.deaf = result;
-        }
-        await this.refresh();
     }
 
     broadcast() {
@@ -248,9 +285,13 @@ export class RpcServer {
     startPolling(interval = 1000) {
         this.timer = setInterval(async () => {
             if (!this.renderer.cdp.ready) return;
-            const before = `${this.settings.mute}:${this.settings.deaf}`;
+            const before = JSON.stringify(this.settings);
             await this.refresh().catch(() => {});
-            if (before !== `${this.settings.mute}:${this.settings.deaf}`) this.broadcast();
+            if (before !== JSON.stringify(this.settings)) this.broadcast();
+
+            this.renderer.getCurrentUser().then(u => {
+                if (u) this.currentUser = u;
+            }).catch(() => {});
         }, interval);
         this.timer.unref?.();
     }

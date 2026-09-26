@@ -27,7 +27,7 @@ arRPC speaks none of these, so your deck buttons do nothing and the plugin never
 `vesktop-deck-rpc` is a small Node.js daemon that **replaces Vesktop's built-in arRPC** with a superset of it:
 
 1. Listens on `discord-ipc-0` and pretends to be Discord's RPC server (it accepts any token, so no real OAuth setup is needed).
-2. Reads/toggles mute & deafen **inside Vesktop** using the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) and Vencord's internals, then pushes `VOICE_SETTINGS_UPDATE` back to the deck.
+2. Reads/applies voice state **inside Vesktop** using the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) and Vencord's internals — mute/deafen, input/output **volume**, **audio device** switching, and **per-user volume/mute/pan** — then pushes `VOICE_SETTINGS_UPDATE` back to the deck.
 3. Re-implements arRPC's Rich Presence, its **process scan game detection** (incl. OBS → Streamer Mode), and invite/deep-link handling.
 
 ```
@@ -60,8 +60,13 @@ No patching of Vesktop or Vencord is required — it survives updates.
 | `SET_ACTIVITY` (Rich Presence from apps/games) | ✅ |
 | Automatic game detection (process scan + Discord detectable DB) | ✅ |
 | OBS / streaming software → Streamer Mode auto-toggle | ✅ |
-| `GET_VOICE_SETTINGS` / `SET_VOICE_SETTINGS` / `VOICE_SETTINGS_UPDATE` | ✅ |
-| `AUTHENTICATE` | ✅ |
+| `GET_VOICE_SETTINGS` / `SET_VOICE_SETTINGS` / `VOICE_SETTINGS_UPDATE` (mute, deafen) | ✅ |
+| Input/output **volume** + **audio device** listing & switching | ✅ |
+| Per-user **volume / local mute / pan** (`SET_USER_VOICE_SETTINGS`) | ✅ |
+| Voice channel **participants** + avatars (`GET_SELECTED_VOICE_CHANNEL`, `GET_IMAGE`) | ✅ |
+| Guild / channel listing (`GET_GUILDS`, `GET_GUILD`, `GET_CHANNELS`, `GET_CHANNEL`) | ✅ |
+| Join / leave voice channel (`SELECT_VOICE_CHANNEL`) | ✅ |
+| `AUTHENTICATE` (returns the real logged-in user) | ✅ |
 | `INVITE_BROWSER` (opens the invite modal) | ✅ |
 | `DEEP_LINK` | ⚠️ best effort |
 | `GUILD_TEMPLATE_BROWSER` | ⚠️ acknowledged, no modal (same as Vesktop) |
