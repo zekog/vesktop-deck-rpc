@@ -1,0 +1,13 @@
+{
+  "name": "vesktop-deck-rpc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord RPC bridge that lets Stream Deck/OpenDeck control Vesktop voice (mute/deafen)",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
